@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Smart Energy Meter</title>
+
+<!-- Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<!-- jsPDF (optional for PDF export) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+<style>
+:root{
+  --bg:#0c0d11; --card:#0f1720; --accent:#00f0ff; --accent2:#00ff95; --danger:#ff3344; --muted:#9aa6b2;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,Arial;background:linear-gradient(180deg,#06060a,#0c0d11);color:#e6f7fb}
+.wrap{max-width:1200px;margin:18px auto;padding:18px}
+header{display:flex;align-items:center;justify-content:space-between;gap:16px}
+h1{font-weight:600;margin:0;color:var(--accent)}
+.btn{background:var(--accent);color:#07121a;border:none;padding:10px 14px;border-radius:10px;cursor:pointer;font-weight:600}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:18px}
+.card{background:linear-gradient(180deg,#0f1720,#0a0c10);border-radius:14px;padding:14px;border:1px solid rgba(0,255,255,0.06);box-shadow:0 8px 30px rgba(0,255,255,0.03)}
+.card.warn{border-color:rgba(255,50,50,0.6);box-shadow:0 10px 30px rgba(255,50,50,0.08);background:linear-gradient(180deg,#2b0f0f,#180a0a)}
+.label{font-size:13px;color:var(--muted)}
+.big{font-size:22px;font-weight:700;color:white;margin:6px 0}
+.small{font-size:13px;color:var(--muted)}
+.gauge-wrap{height:10px;background:#0b0d11;border-radius:8px;overflow:hidden;margin-top:8px}
+.gbar{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));width:0%;transition:width .4s}
+.controls{display:flex;gap:10px;align-items:center}
+.charts{display:grid;grid-template-columns:2fr 1fr;gap:16px;margin-top:18px}
+.full{grid-column:1/3;padding:12px}
+.action{padding:8px 10px;border-radius:10px;background:#07121a;border:1px solid rgba(255,255,255,0.03);cursor:pointer;color:var(--accent)}
+footer{margin-top:18px;color:var(--muted);font-size:13px}
+@media (max-width:900px){.grid{grid-template-columns:1fr}.charts{grid-template-columns:1fr}.full{grid-column:1/2}}
+.pred-badge{display:inline-block;padding:6px 8px;border-radius:8px;background:rgba(255,255,255,0.03);color:var(--accent);font-weight:600;margin-left:8px}
+.anom{color:var(--danger);font-weight:700;margin-left:10px}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>⚡ Smart Energy — Tesla Dashboard</h1>
+      <div class="controls">
+        <button id="connectBtn" class="btn">🔌 Connect ESP Serial</button>
+        <button id="exportCSV" class="action">Export CSV</button>
+        <button id="exportPDF" class="action">Export Monthly PDF</button>
+      </div>
+    </header>
+
+    <div class="grid" id="meters">
+      <div class="card" id="card1">
+        <div class="label">Phase L1</div>
+        <div class="big" id="L1_v">— V</div>
+        <div class="small" id="L1_c">— A</div>
+        <div class="small" id="L1_p">— W</div>
+        <div class="small" id="L1_e">— kWh</div>
+        <div class="gauge-wrap"><div class="gbar" id="g1"></div></div>
+      </div>
+
+      <div class="card" id="card2">
+        <div class="label">Phase L2</div>
+        <div class="big" id="L2_v">— V</div>
+        <div class="small" id="L2_c">— A</div>
+        <div class="small" id="L2_p">— W</div>
+        <div class="small" id="L2_e">— kWh</div>
+        <div class="gauge-wrap"><div class="gbar" id="g2"></div></div>
+      </div>
+
+      <div class="card" id="card3">
+        <div class="label">Phase L3</div>
+        <div class="big" id="L3_v">— V</div>
+        <div class="small" id="L3_c">— A</div>
+        <div class="small" id="L3_p">— W</div>
+        <div class="small" id="L3_e">— kWh</div>
+        <div class="gauge-wrap"><div class="gbar" id="g3"></div></div>
+      </div>
+    </div>
+
+    <div class="charts">
+      <div class="card full">
+        <canvas id="lineChart" height="160"></canvas>
+        <div style="margin-top:12px">
+          <span class="label">Prediction:</span>
+          <span id="prediction" class="pred-badge">—</span>
+          <span id="anomLabel" class="anom" style="display:none">ANOMALY</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="label">Monthly Summary</div>
+        <div class="big" id="monthUnits">— kWh</div>
+        <div class="small" id="monthBill">— ₹</div>
+        <div style="height:12px"></div>
+        <div class="label">Recent Alerts</div>
+        <div id="alerts" style="margin-top:8px"></div>
+      </div>
+    </div>
+
+    <footer>Local-only solution. Python server handles prediction & anomaly detection on localhost:5000 — run it before connecting the page.</footer>
+  </div>
+
+<script>
+/* -----------------------
+  Config
+--------------------------*/
+const RATE_PER_KWH = 8.0;                 // change as needed
+const PREDICT_ENDPOINT = 'http://127.0.0.1:5000/predict'; // local python server
+
+/* -----------------------
+  State
+--------------------------*/
+let port, reader, running=false;
+let dataBuffer = []; // {t, totalPower, totalEnergy, l1, l2, l3}
+const MAX_SAMPLES = 600;
+
+/* -----------------------
+  Chart.js init
+--------------------------*/
+const ctx = document.getElementById('lineChart').getContext('2d');
+const chart = new Chart(ctx, {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: [
+      { label: 'Total Power (W)', data: [], borderColor: '#00f0ff', backgroundColor:'rgba(0,240,255,0.06)', tension:0.2, pointRadius:0 },
+      { label: 'Total Energy (kWh)', data: [], borderColor: '#00ff95', backgroundColor:'rgba(0,255,149,0.06)', tension:0.2, pointRadius:0, yAxisID:'y1' }
+    ]
+  },
+  options: { scales:{ y:{ beginAtZero:true }, y1:{ position:'right', beginAtZero:true } }, plugins:{ legend:{ labels:{color:'#cfeff3'}} } }
+});
+
+/* -----------------------
+  Serial connect
+--------------------------*/
+document.getElementById('connectBtn').addEventListener('click', async () => {
+  if (running) { // disconnect
+    running = false;
+    if (reader) { await reader.cancel(); reader=null; }
+    if (port) { await port.close(); port=null; }
+    document.getElementById('connectBtn').innerText = '🔌 Connect ESP Serial';
+    return;
+  }
+  try {
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 115200 });
+    document.getElementById('connectBtn').innerText = '● Connected (click to disconnect)';
+    running = true;
+    readLoop();
+  } catch (err) {
+    alert('Serial error: ' + err);
+  }
+});
+
+async function readLoop(){
+  const decoder = new TextDecoderStream();
+  port.readable.pipeTo(decoder.writable);
+  reader = decoder.readable.getReader();
+  let partial = '';
+
+  while (running) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    // value could contain several lines; split
+    partial += value;
+    const lines = partial.split(/\r?\n/);
+    partial = lines.pop(); // last incomplete
+    for (let line of lines) {
+      line = line.trim();
+      if (!line) continue;
+      // parse lines printed by ESP
+      // expected examples:
+      // L1:230.5V 0.32A 72.3W
+      // L2:...
+      // L3:...
+      // Energy: 5.21kWh
+      // Cost: Rs 41.68
+      parseSerialLine(line);
+    }
+  }
+}
+
+/* temporary storage for current block */
+let block = { L1:null, L2:null, L3:null, Energy:null, Cost:null };
+
+function parseSerialLine(line){
+  // Phase lines
+  const ph = line.match(/(L[123]):\s*([\d.]+)V\s+([\d.]+)A\s+([\d.]+)W/);
+  if (ph) {
+    const tag = ph[1];
+    block[tag] = { v: parseFloat(ph[2]), c: parseFloat(ph[3]), p: parseFloat(ph[4]), e: null };
+    // if we have all three phases + energy line (or cost), we can process sample when Energy line appears
+    // but to be robust, also process when all L1-L3 present
+    if (block.L1 && block.L2 && block.L3 && block.Energy !== null) {
+      processBlock();
+    }
+    return;
+  }
+
+  // Energy line
+  const eMatch = line.match(/Energy:\s*([\d.]+)kWh/i);
+  if (eMatch) {
+    block.Energy = parseFloat(eMatch[1]);
+    if (block.L1 && block.L2 && block.L3) processBlock();
+    return;
+  }
+
+  // Cost line (we display but not used for ML)
+  const cMatch = line.match(/Cost:\s*Rs\s*([\d.]+)/i);
+  if (cMatch) {
+    block.Cost = parseFloat(cMatch[1]);
+    // update UI
+    document.getElementById('monthBill').innerText = '₹ ' + block.Cost.toFixed(2);
+    return;
+  }
+}
+
+function processBlock(){
+  // copy and reset block (start new)
+  const sample = {
+    t: new Date().toISOString(),
+    L1: block.L1,
+    L2: block.L2,
+    L3: block.L3,
+    totalPower: (block.L1.p || 0) + (block.L2.p || 0) + (block.L3.p || 0),
+    totalEnergy: block.Energy || 0,
+    cost: block.Cost || ( (block.Energy || 0) * RATE_PER_KWH )
+  };
+
+  // UI updates per phase
+  updatePhaseUI(1, sample.L1);
+  updatePhaseUI(2, sample.L2);
+  updatePhaseUI(3, sample.L3);
+  // monthly units
+  document.getElementById('monthUnits').innerText = sample.totalEnergy.toFixed(2) + ' kWh';
+  document.getElementById('monthBill').innerText = '₹ ' + sample.cost.toFixed(2);
+
+  // push to buffer
+  dataBuffer.push(sample);
+  if (dataBuffer.length > MAX_SAMPLES) dataBuffer.shift();
+  refreshChart();
+
+  // send to local python server for prediction & anomaly detection (non-blocking)
+  sendToPredictor(sample).catch(err => {
+    // console.warn('predictor error', err);
+    // ignore if server not running
+  });
+
+  // reset block for next group
+  block = { L1:null, L2:null, L3:null, Energy:null, Cost:null };
+}
+
+function updatePhaseUI(n, obj){
+  if (!obj) return;
+  document.getElementById('L'+n+'_v').innerText = obj.v.toFixed(1) + ' V';
+  document.getElementById('L'+n+'_c').innerText = obj.c.toFixed(2) + ' A';
+  document.getElementById('L'+n+'_p').innerText = obj.p.toFixed(1) + ' W';
+  // we don't know per-phase energy from your print (it prints total energy), keep per-phase energy blank or compute proportional if needed
+  document.getElementById('L'+n+'_e').innerText = '— kWh';
+  const percent = Math.min((obj.p || 0)/50, 100);
+  document.getElementById('g'+n).style.width = percent + '%';
+  const card = document.getElementById('card'+n);
+  if (obj.p > 4000 || obj.v < 190 || obj.v > 260) card.classList.add('warn'); else card.classList.remove('warn');
+}
+
+function refreshChart(){
+  const labels = dataBuffer.map(s => new Date(s.t).toLocaleTimeString());
+  const powers = dataBuffer.map(s => s.totalPower);
+  const energies = dataBuffer.map(s => s.totalEnergy);
+  chart.data.labels = labels;
+  chart.data.datasets[0].data = powers;
+  chart.data.datasets[1].data = energies;
+  chart.update('none');
+}
+
+/* -----------------------
+  Call Python predictor
+  Endpoint expects JSON:
+  { t, totalPower, totalEnergy, L1:{v,c,p}, L2:..., L3:... }
+  returns JSON: { prediction: number, anomaly: bool, reason: string }
+--------------------------*/
+async function sendToPredictor(sample){
+  try {
+    const resp = await fetch(PREDICT_ENDPOINT, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(sample),
+    });
+    if (!resp.ok) throw new Error('bad response');
+    const j = await resp.json();
+    // update UI with prediction
+    document.getElementById('prediction').innerText = j.prediction ? (j.prediction.toFixed(2) + ' kWh') : '—';
+    if (j.anomaly) {
+      document.getElementById('anomLabel').style.display = 'inline';
+      const al = document.getElementById('alerts');
+      const d = document.createElement('div'); d.style.color='var(--danger)'; d.innerText = `[${new Date().toLocaleTimeString()}] Anomaly detected: ${j.reason || 'spike'}`;
+      al.prepend(d);
+    } else {
+      document.getElementById('anomLabel').style.display = 'none';
+    }
+  } catch (err) {
+    // ignore: predictor may be offline
+    // console.warn(err);
+  }
+}
+
+/* -----------------------
+  Export CSV (same as earlier)
+--------------------------*/
+document.getElementById('exportCSV').addEventListener('click', ()=> {
+  let csv = 'timestamp,totalPower,totalEnergy,L1_v,L1_c,L1_p,L2_v,L2_c,L2_p,L3_v,L3_c,L3_p\\n';
+  for (let s of dataBuffer) {
+    csv += `${s.t},${s.totalPower},${s.totalEnergy},${s.L1.v},${s.L1.c},${s.L1.p},${s.L2.v},${s.L2.c},${s.L2.p},${s.L3.v},${s.L3.c},${s.L3.p}\\n`;
+  }
+  const blob = new Blob([csv], {type:'text/csv'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'energy_log.csv'; a.click();
+});
+
+/* Export PDF (basic) */
+document.getElementById('exportPDF').addEventListener('click', ()=> {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  doc.setFontSize(16); doc.text('Smart Energy Monthly Summary', 14, 20);
+  doc.setFontSize(12); doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 32);
+  doc.text(`Units (kWh): ${dataBuffer.length? dataBuffer[dataBuffer.length-1].totalEnergy.toFixed(2): '—'}`, 14, 44);
+  doc.text(`Prediction: ${document.getElementById('prediction').innerText}`, 14, 52);
+  doc.save('monthly_summary.pdf');
+});
+</script>
+</body>
+</html>

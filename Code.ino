@@ -4,7 +4,7 @@
    Modified by Kay & GPT-5
 ***************************************************/
 // === Blynk Template Info ===
-#define BLYNK_TEMPLATE_ID "TMPL3fExQMeu9"
+#define BLYNK_TEMPLATE_ID "TMPL34VHUQzsv"
 #define BLYNK_TEMPLATE_NAME "SmartEnergyMeter"
 #define BLYNK_PRINT Serial
 
@@ -20,7 +20,7 @@
 // === WiFi & Blynk Credentials ===
 char ssid[] = "Your-WIFI-Name";
 char pass[] = "Your-Wifi-Password";
-char auth[] = "57rMefYRctF2mRE0IsT5xK38YrJQ9QxD"; // Blynk Auth Token
+char auth[] = "JDZCI0o_eamM_rfOcqMSV_Q1TinO0yLs"; // Blynk Auth Token
 
 // === OLED Display ===
 #define SCREEN_WIDTH 128

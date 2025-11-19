@@ -1,40 +1,27 @@
-/***************************************************
-   3-PHASE SMART ENERGY METER
-   ESP8266 (NodeMCU / ESP-12E) + 3×PZEM004T + OLED + Blynk Cloud
-   Modified by Kay & GPT-5
-***************************************************/
 // === Blynk Template Info ===
-#define BLYNK_TEMPLATE_ID "TMPL34VHUQzsv"
+#define BLYNK_TEMPLATE_ID "TMPL3fExQMeu9"
 #define BLYNK_TEMPLATE_NAME "SmartEnergyMeter"
 #define BLYNK_PRINT Serial
 
 #include <ESP8266WiFi.h>
 #include <BlynkSimpleEsp8266.h>
 #include <PZEM004Tv30.h>
-#include <Wire.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
-
-
+#include <SoftwareSerial.h>
 
 // === WiFi & Blynk Credentials ===
-char ssid[] = "Your-WIFI-Name";
-char pass[] = "Your-Wifi-Password";
+char ssid[] = "yourwifiname";
+char pass[] = "yourwifipassword";
 char auth[] = "JDZCI0o_eamM_rfOcqMSV_Q1TinO0yLs"; // Blynk Auth Token
 
-// === OLED Display ===
-#define SCREEN_WIDTH 128
-#define SCREEN_HEIGHT 64
-#define OLED_ADDR 0x3C
-#define OLED_SDA 13  // D7
-#define OLED_SCL 3   // RX
-#define OLED_RESET -1
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+// === SoftwareSerial Setup for 3 PZEM Modules ===
+// ESP-12E safe pins
+SoftwareSerial pzem1Serial(14, 12); // D5 (TX), D6 (RX)
+SoftwareSerial pzem2Serial(13, 15); // D7 (TX), D8 (RX)
+SoftwareSerial pzem3Serial(5, 4);   // D1 (TX), D2 (RX)
 
-// === PZEM Connections ===
-PZEM004Tv30 pzem1(4, 5);   // D2 -> TX, D1 -> RX
-PZEM004Tv30 pzem2(2, 0);   // D4 -> TX, D3 -> RX
-PZEM004Tv30 pzem3(12, 14); // D6 -> TX, D5 -> RX
+PZEM004Tv30 pzem1(pzem1Serial);
+PZEM004Tv30 pzem2(pzem2Serial);
+PZEM004Tv30 pzem3(pzem3Serial);
 
 // === Phase Values ===
 float voltage1, current1, power1, energy1, frequency1, pf1, va1, VAR1;
@@ -42,39 +29,21 @@ float voltage2, current2, power2, energy2, frequency2, pf2, va2, VAR2;
 float voltage3, current3, power3, energy3, frequency3, pf3, va3, VAR3;
 float voltage3ph, current3ph, power3ph, energy3ph, frequency3ph, pf3ph, va3ph, VAR3ph;
 
-// === Function Prototypes ===
-void SetupDisplay();
+// === Functions ===
 float zeroIfNan(float v);
 void WiFiCheck();
 
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(9600);
   delay(1000);
-  Serial.println("\nSmart 3-Phase Meter Booting...");
 
-  SetupDisplay();
+  Serial.println("\nSmart 3-Phase Meter Booting...");
 
   // Connect WiFi + Blynk Cloud
   Blynk.begin(auth, ssid, pass, "blynk.cloud", 8080);
 
-  display.clearDisplay();
-  display.setCursor(10, 20);
-  display.setTextSize(1);
-  display.setTextColor(WHITE);
-  display.println("WiFi + Blynk Connected!");
-  display.display();
+  Serial.println("WiFi + Blynk Connected!");
   delay(1000);
-}
-
-void SetupDisplay() {
-  Wire.begin(OLED_SDA, OLED_SCL);
-  display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR);
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(WHITE);
-  display.setCursor(0, 20);
-  display.println("Initializing...");
-  display.display();
 }
 
 // === MAIN LOOP ===
@@ -86,7 +55,7 @@ void loop() {
   voltage1 = zeroIfNan(pzem1.voltage());
   current1 = zeroIfNan(pzem1.current());
   power1   = zeroIfNan(pzem1.power());
-  energy1  = zeroIfNan(pzem1.energy() / 1000);
+  energy1  = zeroIfNan(pzem1.energy() / 1000); // kWh
   frequency1 = zeroIfNan(pzem1.frequency());
   pf1 = zeroIfNan(pzem1.pf());
   va1 = (pf1 == 0) ? 0 : power1 / pf1;
@@ -132,25 +101,24 @@ void loop() {
   Blynk.virtualWrite(V7, va3ph);
   Blynk.virtualWrite(V8, VAR3ph);
 
-  // === Print on Serial (for Debug) ===
+  // === Serial Debug (Normal) ===
   Serial.printf("3PH => V:%.1fV  I:%.2fA  P:%.1fW  F:%.1fHz  PF:%.2f  E:%.2fkWh\n",
                 voltage3ph, current3ph, power3ph, frequency3ph, pf3ph, energy3ph);
 
-  // === Display on OLED ===
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setCursor(0, 0);
-  display.print("3PH V: "); display.println(voltage3ph);
-  display.print("3PH I: "); display.println(current3ph);
-  display.print("3PH P: "); display.println(power3ph);
-  display.print("3PH PF: "); display.println(pf3ph);
-  display.print("3PH E: "); display.println(energy3ph);
-  display.display();
+  // === REQUIRED: Serial output for Python Bridge ===
+  Serial.printf("L1:%.1fV %.2fA %.1fW\n", voltage1, current1, power1);
+  Serial.printf("L2:%.1fV %.2fA %.1fW\n", voltage2, current2, power2);
+  Serial.printf("L3:%.1fV %.2fA %.1fW\n", voltage3, current3, power3);
+
+  Serial.printf("Energy: %.3fkWh\n", energy3ph);
+
+  float cost = energy3ph * 8.0; // ₹8 per unit
+  Serial.printf("Cost: %.2f\n", cost);
 
   delay(2000);
 }
 
-// === Functions ===
+// === Utility Functions ===
 float zeroIfNan(float v) {
   return isnan(v) ? 0 : v;
 }
